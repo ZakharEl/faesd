@@ -74,20 +74,17 @@ fn add_new_library(lib: &std::ffi::OsStr, description: &str) -> Result<(), liblo
 		return Ok(())
 	}
 	unsafe {
-		if let Ok(lib) = libloading::Library::new(&lib_filename) {
-			LIBRARIES.push(Library {
-				path: std::path::PathBuf::from(&lib_filename),
-				description: description.to_string(),
-				lib,
-				config_parsers: Vec::new(),
-			});
-			return Ok(())
-		}
-		let actual_lib = libloading::Library::new(lib)?;
+		let (path, lib) = 'get_lib: {
+			if let Ok(lib) = libloading::Library::new(&lib_filename) {
+				break 'get_lib (std::path::PathBuf::from(&lib_filename), lib);
+			}
+			let actual_lib = libloading::Library::new(lib)?;
+			(std::path::PathBuf::from(lib), actual_lib)
+		};
 		LIBRARIES.push(Library {
-			path: std::path::PathBuf::from(lib),
+			path,
 			description: description.to_string(),
-			lib: actual_lib,
+			lib,
 			config_parsers: Vec::new(),
 		});
 	}
