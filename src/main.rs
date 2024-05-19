@@ -65,21 +65,21 @@ fn find_library(lib: &std::ffi::OsStr) -> Option<usize> {
 	None
 }
 
-fn add_new_library(lib: &std::ffi::OsStr, description: &str) -> Result<(), libloading::Error> {
-	if let Some(_) = find_library(lib) {
+fn add_new_library(file_name: &std::ffi::OsStr, description: &str) -> Result<(), libloading::Error> {
+	if let Some(_) = find_library(file_name) {
 		return Ok(())
 	}
-	let lib_filename = libloading::library_filename(lib);
-	if let Some(_) = find_library(&lib_filename) {
+	let longer_file_name = libloading::library_filename(file_name);
+	if let Some(_) = find_library(&longer_file_name) {
 		return Ok(())
 	}
 	unsafe {
 		let (path, lib) = 'get_lib: {
-			if let Ok(lib) = libloading::Library::new(&lib_filename) {
-				break 'get_lib (std::path::PathBuf::from(&lib_filename), lib);
+			if let Ok(lib) = libloading::Library::new(&longer_file_name) {
+				break 'get_lib (std::path::PathBuf::from(&longer_file_name), lib);
 			}
-			let actual_lib = libloading::Library::new(lib)?;
-			(std::path::PathBuf::from(lib), actual_lib)
+			let lib = libloading::Library::new(file_name)?;
+			(std::path::PathBuf::from(file_name), lib)
 		};
 		LIBRARIES.push(Library {
 			path,
