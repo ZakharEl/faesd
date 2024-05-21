@@ -50,7 +50,7 @@ impl<'p> Library<'p> {
 static mut LIBRARIES: Vec<Library> = Vec::new();
 static mut SCOPES: Vec<snippet_config_types::Scope> = Vec::new();
 
-fn find_library(lib: &std::ffi::OsStr) -> Option<usize> {
+fn find_library(lib: &std::path::PathBuf) -> Option<usize> {
 	unsafe {
 		let mut i: usize = 0;
 		let len = LIBRARIES.len();
@@ -65,30 +65,38 @@ fn find_library(lib: &std::ffi::OsStr) -> Option<usize> {
 	None
 }
 
-fn add_new_library(file_name: &std::ffi::OsStr, description: &str) -> Result<(), libloading::Error> {
-	if let Some(_) = find_library(file_name) {
-		return Ok(())
+fn get_lib_path(file_name: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
+	let file_path = std::path::PathBuf::from(file_name);
+	if file_path.exists() {
+		return Some(file_path)
 	}
-	let longer_file_name = libloading::library_filename(file_name);
-	if let Some(_) = find_library(&longer_file_name) {
+	let longer_file_path = libloading::library_filename(file_name);
+	let longer_file_path = std::path::PathBuf::from(&longer_file_path);
+	if longer_file_path.exists() {
+		return Some(longer_file_path)
+	}
+	eprintln!("{:?} either does not exist or one does not have permissions to access it!", file_name);
+	None
+}
+
+fn add_new_library(lib_path: std::path::PathBuf, description: &str) -> Result<(), libloading::Error> {
+	if let Some(_) = find_library(&lib_path) {
 		return Ok(())
 	}
 	unsafe {
-		let (path, lib) = 'get_lib: {
-			if let Ok(lib) = libloading::Library::new(&longer_file_name) {
-				break 'get_lib (std::path::PathBuf::from(&longer_file_name), lib);
-			}
-			let lib = libloading::Library::new(file_name)?;
-			(std::path::PathBuf::from(file_name), lib)
-		};
+		let lib = libloading::Library::new(&lib_path)?;
 		LIBRARIES.push(Library {
-			path,
+			path: lib_path,
 			description: description.to_string(),
 			lib,
 			config_parsers: Vec::new(),
 		});
 	}
 	Ok(())
+}
+
+fn add_new_config_parser() -> Result<(), libloading::Error> {
+	todo!()
 }
 
 fn main() {
