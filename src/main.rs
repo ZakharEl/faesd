@@ -50,6 +50,20 @@ impl<'p> Library<'p> {
 static mut LIBRARIES: Vec<Library> = Vec::new();
 static mut SCOPES: Vec<snippet_config_types::Scope> = Vec::new();
 
+fn get_lib_path(file_name: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
+	let file_path = std::path::PathBuf::from(file_name);
+	if file_path.exists() {
+		return Some(file_path)
+	}
+	let longer_file_path = libloading::library_filename(file_name);
+	let longer_file_path = std::path::PathBuf::from(&longer_file_path);
+	if longer_file_path.exists() {
+		return Some(longer_file_path)
+	}
+	eprintln!("{:?} either does not exist or one does not have permissions to access it!", file_name);
+	None
+}
+
 fn find_library(lib: &std::path::PathBuf) -> Option<usize> {
 	unsafe {
 		let mut i: usize = 0;
@@ -62,20 +76,6 @@ fn find_library(lib: &std::path::PathBuf) -> Option<usize> {
 			i += 1;
 		}
 	}
-	None
-}
-
-fn get_lib_path(file_name: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
-	let file_path = std::path::PathBuf::from(file_name);
-	if file_path.exists() {
-		return Some(file_path)
-	}
-	let longer_file_path = libloading::library_filename(file_name);
-	let longer_file_path = std::path::PathBuf::from(&longer_file_path);
-	if longer_file_path.exists() {
-		return Some(longer_file_path)
-	}
-	eprintln!("{:?} either does not exist or one does not have permissions to access it!", file_name);
 	None
 }
 
@@ -95,8 +95,37 @@ fn add_new_library(lib_path: std::path::PathBuf, description: &str) -> Result<()
 	Ok(())
 }
 
-fn add_new_config_parser() -> Result<(), libloading::Error> {
-	todo!()
+fn find_config_parser(lib_path: &std::path::PathBuf, parser: &str) -> Option<usize> {
+	unsafe {
+		let mut i: usize = 0;
+		let len = LIBRARIES.len();
+		let lib = loop {
+			if i == len {
+				return None
+			}
+			let lib = &LIBRARIES[i];
+			if lib.path.eq(lib_path) {
+				break lib
+			}
+			i += 1;
+		};
+		lib.find_config_parser(parser)
+	}
+}
+
+fn add_new_config_parser(lib_path: &std::path::PathBuf, parser: &str, description: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+	unsafe {
+		let lib_index = if let Some(lib_index) = find_config_parser(lib_path, parser) {
+			lib_index
+		} else {
+			let mut lib_as_os_string = std::ffi::OsString::from(lib_path.clone());
+			lib_as_os_string.push(": not loaded\0");
+			return Err(Box::new(libloading::Error::DlOpen {
+				desc: std::ffi::CStr::from_bytes_with_nul(lib_as_os_string.as_encoded_bytes())?.into()
+			}))
+		};
+		LIBRARIES[lib_index].add_new_config_parser(parser, description)
+	}
 }
 
 fn main() {
@@ -107,9 +136,18 @@ fn main() {
 mod tests {
 	use super::*;
 	#[test]
-	fn pointer_eq() {
-		let t1: fn(lib: &std::ffi::OsStr) -> Option<usize> = find_library;
-		let t2: fn(lib: &std::ffi::OsStr) -> Option<usize> = find_library;
-		assert_eq!(t1 as usize, t2 as usize);
+	fn unknown_lib() {
+		unsafe {
+			if let Err(e) = libloading::Library::new("./test.so") {
+				eprintln!("{:?}", e);
+			}
+		}
+	}
+	#[test]
+	fn unloaded_lib() {
+		let lib_path = std::path::PathBuf::from("./test.so");
+		if let Err(e) = add_new_config_parser(&lib_path, "vscode_parser", "VSCode compatable parser") {
+			eprintln!("{:?}", e);
+		}
 	}
 }
