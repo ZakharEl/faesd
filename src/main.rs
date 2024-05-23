@@ -119,12 +119,14 @@ fn add_new_config_parser(lib_path: &std::path::PathBuf, parser: &str, descriptio
 			lib_index
 		} else {
 			let mut lib_as_os_string = std::ffi::OsString::from(lib_path.clone());
-			lib_as_os_string.push(": not loaded\0");
-			return Err(Box::new(libloading::Error::DlOpen {
-				desc: std::ffi::CStr::from_bytes_with_nul(lib_as_os_string.as_encoded_bytes())?.into()
-			}))
+			lib_as_os_string.push(": not loaded");
+			return Err(String::from_utf8_unchecked(lib_as_os_string.as_encoded_bytes().to_vec()).into()) //may want to call escape_debug method on String immediately before calling into method
 		};
-		LIBRARIES[lib_index].add_new_config_parser(parser, description)
+		let lib = &mut LIBRARIES[lib_index];
+		if let Some(_) = lib.find_config_parser(parser) {
+			return Ok(())
+		}
+		lib.add_new_config_parser(parser, description)
 	}
 }
 
