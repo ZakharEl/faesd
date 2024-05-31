@@ -19,36 +19,39 @@ struct Library<'p> {
 	config_parsers: Vec<ConfigParser<'p>>,
 }
 impl<'p> Library<'p> {
-	fn add_new_config_parser(&'p mut self, parser: &str, description: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+	fn find_config_parser<'parser_borrow, 'self_borrow: 'parser_borrow>(&'self_borrow mut self, parser_name: &str) -> Option<&'parser_borrow mut ConfigParser<'p>> {
+		for parser in &mut self.config_parsers {
+			if parser.name.eq(parser_name) {
+				return Some(parser)
+			}
+		}
+		None
+	}
+	fn add_new_config_parser<'self_borrow>(&'self_borrow mut self, parser: &str, description: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+	where
+		'p: 'self_borrow
+	{
 		if let Some(_) = self.find_config_parser(parser) {
 			return Ok(())
 		}
 		unsafe {
-			let value = self.lib.get_stabbied(parser.as_bytes())?;
+			let lib = std::ptr::addr_of!(self.lib); // For unbounded lifetime use latter
 			self.config_parsers.push(ConfigParser {
 				name: parser.to_string(),
 				description: description.to_string(),
-				value,
+				value: (*lib).get_stabbied(parser.as_bytes())?,
+				/*
+				Unbounded lifetime is used and immediately bound into 'p lifetime, I think.
+				Calling one of the items within the config_parsers field of a Library after the lib field of said Library has been changed is undefined behavior.
+				Should probably implement drop on Library to insure the config_parsers get dropped correctly.
+				*/
 			});
-			Ok(())
 		}
-	}
-	fn find_config_parser(&self, parser: &str) -> Option<usize> {
-		let mut i: usize = 0;
-		let parsers = &self.config_parsers;
-		let len = parsers.len();
-		while i < len {
-			if parsers[i].name.eq(parser) {
-				return Some(i)
-			}
-			i += 1;
-		}
-		None
+		Ok(())
 	}
 }
 
 static mut LIBRARIES: Vec<Library> = Vec::new();
-static mut SCOPES: Vec<snippet_config_types::Scope> = Vec::new();
 
 fn get_lib_path(file_name: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
 	let file_path = std::path::PathBuf::from(file_name);
@@ -64,21 +67,16 @@ fn get_lib_path(file_name: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
 	None
 }
 
-fn find_library(lib: &std::path::PathBuf) -> Option<usize> {
+fn find_library<'l>(lib_path: &std::path::PathBuf) -> Option<&'l mut Library<'static>> {
 	unsafe {
-		let mut i: usize = 0;
-		let len = LIBRARIES.len();
-		while i < len {
-			let path = &LIBRARIES[i].path;
-			if path == lib {
-				return Some(i)
+		for lib in &mut LIBRARIES {
+			if lib.path.eq(lib_path) {
+				return Some(lib)
 			}
-			i += 1;
 		}
 	}
 	None
 }
-
 fn add_new_library(lib_path: std::path::PathBuf, description: &str) -> Result<(), libloading::Error> {
 	if let Some(_) = find_library(&lib_path) {
 		return Ok(())
@@ -95,7 +93,7 @@ fn add_new_library(lib_path: std::path::PathBuf, description: &str) -> Result<()
 	Ok(())
 }
 
-fn find_config_parser(lib_path: &std::path::PathBuf, parser: &str) -> Option<usize> {
+fn find_config_parser<'p>(lib_path: &std::path::PathBuf, parser: &str) -> Option<&'p mut ConfigParser<'static>> {
 	unsafe {
 		let mut i: usize = 0;
 		let len = LIBRARIES.len();
@@ -103,7 +101,7 @@ fn find_config_parser(lib_path: &std::path::PathBuf, parser: &str) -> Option<usi
 			if i == len {
 				return None
 			}
-			let lib = &LIBRARIES[i];
+			let lib = &mut LIBRARIES[i];
 			if lib.path.eq(lib_path) {
 				break lib
 			}
@@ -112,20 +110,15 @@ fn find_config_parser(lib_path: &std::path::PathBuf, parser: &str) -> Option<usi
 		lib.find_config_parser(parser)
 	}
 }
-
 fn add_new_config_parser(lib_path: &std::path::PathBuf, parser: &str, description: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	unsafe {
-		let lib_index = if let Some(lib_index) = find_config_parser(lib_path, parser) {
-			lib_index
+		let lib = if let Some(lib) = find_library(lib_path) {
+			lib
 		} else {
 			let mut lib_as_os_string = std::ffi::OsString::from(lib_path.clone());
 			lib_as_os_string.push(": not loaded");
 			return Err(String::from_utf8_unchecked(lib_as_os_string.as_encoded_bytes().to_vec()).into()) //may want to call escape_debug method on String immediately before calling into method
 		};
-		let lib = &mut LIBRARIES[lib_index];
-		if let Some(_) = lib.find_config_parser(parser) {
-			return Ok(())
-		}
 		lib.add_new_config_parser(parser, description)
 	}
 }
