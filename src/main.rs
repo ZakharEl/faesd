@@ -1,5 +1,11 @@
 use stabby::libloading::StabbyLibrary;
 
+fn string_from_path_buf(path: &std::path::PathBuf) -> String {
+	unsafe {
+		String::from_utf8_unchecked(std::ffi::OsString::from(path.clone()).as_encoded_bytes().to_vec())
+	}
+}
+
 struct ConfigParser<'p> {
 	name: String,
 	description: String,
@@ -19,22 +25,26 @@ struct Library<'p> {
 	config_parsers: Vec<ConfigParser<'p>>,
 }
 impl<'p> Library<'p> {
-	fn find_config_parser<'parser_borrow, 'self_borrow: 'parser_borrow>(&'self_borrow mut self, parser_name: &str) -> Option<&'parser_borrow mut ConfigParser<'p>> {
+	fn find_config_parser<'parser_borrow, 'self_borrow: 'parser_borrow>(&'self_borrow mut self, parser_name: &str) -> Result<&'parser_borrow mut ConfigParser<'p>, String> {
 		for parser in &mut self.config_parsers {
 			if parser.name.eq(parser_name) {
-				return Some(parser)
+				return Ok(parser)
 			}
 		}
-		None
+		let mut error = String::from(parser_name);
+		error.push_str(": not loaded on ");
+		let lib_path = string_from_path_buf(&self.path);
+		error.push_str(&lib_path);
+		return Err(error)
 	}
-	fn add_new_config_parser<'self_borrow>(&'self_borrow mut self, parser: &str, description: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+	fn add_new_config_parser<'parser_borrow, 'self_borrow: 'parser_borrow>(&'self_borrow mut self, parser: &str, description: &str) -> Result<&'parser_borrow mut ConfigParser<'p>, Box<dyn std::error::Error + Send + Sync>>
 	where
 		'p: 'self_borrow
 	{
-		if let Some(_) = self.find_config_parser(parser) {
-			return Ok(())
-		}
 		unsafe {
+			if let Ok(parser) = (*(self as *mut Self)).find_config_parser(parser) { //unbounded lifetime like that described below
+				return Ok(parser)
+			}
 			let lib = std::ptr::addr_of!(self.lib); // For unbounded lifetime use latter
 			self.config_parsers.push(ConfigParser {
 				name: parser.to_string(),
@@ -47,39 +57,40 @@ impl<'p> Library<'p> {
 				*/
 			});
 		}
-		Ok(())
+		Ok(self.config_parsers.last_mut().unwrap())
 	}
 }
 
 static mut LIBRARIES: Vec<Library> = Vec::new();
 
-fn get_lib_path(file_name: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
+fn get_lib_path(file_name: &std::ffi::OsStr) -> Result<std::path::PathBuf, String> {
 	let file_path = std::path::PathBuf::from(file_name);
 	if file_path.exists() {
-		return Some(file_path)
+		return Ok(file_path)
 	}
 	let longer_file_path = libloading::library_filename(file_name);
 	let longer_file_path = std::path::PathBuf::from(&longer_file_path);
 	if longer_file_path.exists() {
-		return Some(longer_file_path)
+		return Ok(longer_file_path)
 	}
-	eprintln!("{:?} either does not exist or one does not have permissions to access it!", file_name);
-	None
+	Err(format!("{:?} either does not exist or one does not have permissions to access it!", file_name))
 }
 
-fn find_library<'l>(lib_path: &std::path::PathBuf) -> Option<&'l mut Library<'static>> {
+fn find_library<'l>(lib_path: &std::path::PathBuf) -> Result<&'l mut Library<'static>, String> {
 	unsafe {
 		for lib in &mut LIBRARIES {
 			if lib.path.eq(lib_path) {
-				return Some(lib)
+				return Ok(lib)
 			}
 		}
 	}
-	None
+	let mut lib = string_from_path_buf(lib_path);
+	lib.push_str(": not loaded");
+	Err(lib) //may want to call escape_debug method on String immediately before calling into method
 }
-fn add_new_library(lib_path: std::path::PathBuf, description: &str) -> Result<(), libloading::Error> {
-	if let Some(_) = find_library(&lib_path) {
-		return Ok(())
+fn add_new_library<'l>(lib_path: std::path::PathBuf, description: &str) -> Result<&'l mut Library<'static>, libloading::Error> {
+	if let Ok(lib) = find_library(&lib_path) {
+		return Ok(lib)
 	}
 	unsafe {
 		let lib = libloading::Library::new(&lib_path)?;
@@ -89,36 +100,17 @@ fn add_new_library(lib_path: std::path::PathBuf, description: &str) -> Result<()
 			lib,
 			config_parsers: Vec::new(),
 		});
+		Ok(LIBRARIES.last_mut().unwrap())
 	}
-	Ok(())
 }
 
-fn find_config_parser<'p>(lib_path: &std::path::PathBuf, parser: &str) -> Option<&'p mut ConfigParser<'static>> {
-	unsafe {
-		let mut i: usize = 0;
-		let len = LIBRARIES.len();
-		let lib = loop {
-			if i == len {
-				return None
-			}
-			let lib = &mut LIBRARIES[i];
-			if lib.path.eq(lib_path) {
-				break lib
-			}
-			i += 1;
-		};
-		lib.find_config_parser(parser)
-	}
+fn find_config_parser<'p>(lib_path: &std::path::PathBuf, parser: &str) -> Result<&'p mut ConfigParser<'static>, String> {
+	let lib = find_library(lib_path)?;
+	lib.find_config_parser(parser)
 }
-fn add_new_config_parser(lib_path: &std::path::PathBuf, parser: &str, description: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn add_new_config_parser<'p>(lib_path: &std::path::PathBuf, parser: &str, description: &str) -> Result<&'p mut ConfigParser<'static>, Box<dyn std::error::Error + Send + Sync>> {
 	unsafe {
-		let lib = if let Some(lib) = find_library(lib_path) {
-			lib
-		} else {
-			let mut lib_as_os_string = std::ffi::OsString::from(lib_path.clone());
-			lib_as_os_string.push(": not loaded");
-			return Err(String::from_utf8_unchecked(lib_as_os_string.as_encoded_bytes().to_vec()).into()) //may want to call escape_debug method on String immediately before calling into method
-		};
+		let lib = find_library(lib_path)?;
 		lib.add_new_config_parser(parser, description)
 	}
 }
