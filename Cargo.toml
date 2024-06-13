@@ -9,3 +9,4 @@ edition = "2021"
 stabby = { version = "5.0.0",  features = ["libloading"] }
 snippet-config-types = { git = "https://github.com/ZakharEl/snippet-config-types.git", version = "*" }
 libloading = { version = "*" }
+clap = { version = "*", features = ["derive"] }

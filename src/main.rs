@@ -1,9 +1,13 @@
 use stabby::libloading::StabbyLibrary;
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
-fn string_from_path_buf(path: &std::path::PathBuf) -> String {
+fn string_from_os_string(os_string: &std::ffi::OsStr) -> String {
 	unsafe {
-		String::from_utf8_unchecked(std::ffi::OsString::from(path.clone()).as_encoded_bytes().to_vec())
+		String::from_utf8_unchecked(os_string.as_encoded_bytes().to_vec())
 	}
+}
+fn string_from_path_buf(path: &std::path::PathBuf) -> String {
+	string_from_os_string(path.as_ref())
 }
 
 struct ConfigParser<'p> {
@@ -35,7 +39,7 @@ impl<'p> Library<'p> {
 		error.push_str(": not loaded on ");
 		let lib_path = string_from_path_buf(&self.path);
 		error.push_str(&lib_path);
-		return Err(error)
+		Err(error)
 	}
 	fn add_new_config_parser<'parser_borrow, 'self_borrow: 'parser_borrow>(&'self_borrow mut self, parser: &str, description: &str) -> Result<&'parser_borrow mut ConfigParser<'p>, Box<dyn std::error::Error + Send + Sync>>
 	where
@@ -63,18 +67,33 @@ impl<'p> Library<'p> {
 
 static mut LIBRARIES: Vec<Library> = Vec::new();
 
-fn get_lib_path(file_name: &std::ffi::OsStr) -> Result<std::path::PathBuf, String> {
-	let file_path = std::path::PathBuf::from(file_name);
-	if file_path.exists() {
-		return Ok(file_path)
+fn get_library_path_buf(path: &std::path::PathBuf) -> Result<std::path::PathBuf, String> {
+	let library_file_name = path.file_name();
+	if let None = library_file_name {
+		return Err(
+			if let Some(_) = path.parent() {
+				format!("{:?} path is a directory!", path)
+			} else {
+				String::from("Not a valid path!")
+			}
+		)
 	}
-	let longer_file_path = libloading::library_filename(file_name);
-	let longer_file_path = std::path::PathBuf::from(&longer_file_path);
-	if longer_file_path.exists() {
-		return Ok(longer_file_path)
-	}
-	Err(format!("{:?} either does not exist or one does not have permissions to access it!", file_name))
+	let mut path = path.clone();
+	path.set_file_name(libloading::library_filename(library_file_name.unwrap()));
+	Ok(path)
 }
+
+//fn get_lib_path(os_str_path: &std::ffi::OsStr) -> Result<std::path::PathBuf, String> {
+//	let mut path = std::path::PathBuf::from(os_str_path);
+//	if path.exists() {
+//		return Ok(path)
+//	}
+//	get_library_path_buf(&mut path)?;
+//	if path.exists() {
+//		return Ok(path)
+//	}
+//	Err(format!("{:?} either does not exist or one does not have permissions to access it!", os_str_path))
+//}
 
 fn find_library<'l>(lib_path: &std::path::PathBuf) -> Result<&'l mut Library<'static>, String> {
 	unsafe {
@@ -115,8 +134,37 @@ fn add_new_config_parser<'p>(lib_path: &std::path::PathBuf, parser: &str, descri
 	}
 }
 
-fn main() {
-    println!("Hello, world!");
+#[derive(Parser)]
+struct LibraryInterface {
+	#[command(subcommand)]
+	action: LibraryAction,
+}
+#[derive(Subcommand, Debug)]
+enum LibraryAction {
+	Find {
+		#[command(subcommand)]
+		library_or_parser: LibraryOrParser,
+	},
+	Add {
+		#[command(subcommand)]
+		library_or_parser: LibraryOrParser,
+	},
+}
+#[derive(Subcommand, Debug)]
+enum LibraryOrParser {
+	Library {
+		lib: std::path::PathBuf,
+	},
+	Parser {
+		lib: std::path::PathBuf,
+		parser: String,
+	},
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let library_interface = LibraryInterface::try_parse_from(["", "find", "library", "yo"])?;
+    println!("{:?}", library_interface.action);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -136,5 +184,11 @@ mod tests {
 		if let Err(e) = add_new_config_parser(&lib_path, "vscode_parser", "VSCode compatable parser") {
 			eprintln!("{:?}", e);
 		}
+	}
+	#[test]
+	fn library_filename_test() {
+		println!("{}", unsafe {
+			String::from_utf8_unchecked(libloading::library_filename("test").as_encoded_bytes().to_vec())
+		});
 	}
 }
